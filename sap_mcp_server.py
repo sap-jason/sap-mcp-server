@@ -69,7 +69,7 @@ def odata_get(path: str, params: dict = None) -> dict:
 def get_csrf_token() -> tuple[str, dict]:
     url = f"{SAP_BASE_URL}/"
     headers = {"x-csrf-token": "Fetch", "Accept": "application/json"}
-    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True, timeout=60)
     token = response.headers.get("x-csrf-token", "")
     cookies = dict(response.cookies)
     return token, cookies
@@ -83,7 +83,7 @@ def odata_post(path: str, payload: dict) -> dict:
         "Content-Type": "application/json",
         "x-csrf-token": token,
     }
-    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -102,7 +102,7 @@ def odata_patch(path: str, payload: dict) -> bool:
         "x-csrf-token": token,
         "If-Match": "*",
     }
-    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -811,7 +811,7 @@ def odata_v4_get(path: str, params: dict = None) -> dict:
     headers = {"Accept": "application/json"}
     if params is None:
         params = {}
-    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -844,7 +844,7 @@ def odata_v4_post(path: str, payload: dict) -> dict:
         "Content-Type": "application/json",
         "x-csrf-token": token,
     }
-    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -863,7 +863,7 @@ def odata_v4_patch(path: str, payload: dict) -> bool:
         "x-csrf-token": token,
         "If-Match": "*",
     }
-    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -2688,7 +2688,7 @@ def prod_odata_get(path: str, params: dict = None) -> dict:
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{SAP_PROD_BASE_URL}{path}?{query_string}"
     headers = {"Accept": "application/json"}
-    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -2696,7 +2696,7 @@ def prod_odata_get(path: str, params: dict = None) -> dict:
 def get_csrf_token_prod() -> tuple[str, dict]:
     url = f"{SAP_PROD_BASE_URL}/"
     headers = {"x-csrf-token": "Fetch", "Accept": "application/json"}
-    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True, timeout=60)
     token = response.headers.get("x-csrf-token", "")
     cookies = dict(response.cookies)
     return token, cookies
@@ -2710,7 +2710,7 @@ def prod_odata_post(path: str, payload: dict) -> dict:
         "Content-Type": "application/json",
         "x-csrf-token": token,
     }
-    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -2729,7 +2729,7 @@ def prod_odata_patch(path: str, payload: dict) -> bool:
         "x-csrf-token": token,
         "If-Match": "*",
     }
-    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.patch(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -2748,7 +2748,7 @@ def prod_odata_function(function_name: str, params: dict) -> dict:
         "x-csrf-token": token,
         "If-Match": "*",
     }
-    response = httpx.post(url, auth=get_auth(), headers=headers, cookies=cookies, verify=True)
+    response = httpx.post(url, auth=get_auth(), headers=headers, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -2905,7 +2905,7 @@ def release_production_order(manufacturing_order: str) -> str:
         # Step 1: 获取 ETag（If-Match 是 ReleaseOrder function import 的必需头）
         get_url = f"{SAP_PROD_BASE_URL}/A_ProductionOrder_2('{manufacturing_order}')?$format=json&sap-client=100"
         get_resp = httpx.get(get_url, auth=get_auth(), headers={"Accept": "application/json"},
-                             follow_redirects=True, timeout=30, verify=True)
+                             follow_redirects=True, timeout=60, verify=True)
         etag = get_resp.headers.get("ETag", "*")
 
         # Step 2: 获取 CSRF token
@@ -2943,7 +2943,7 @@ def technically_complete_production_order(manufacturing_order: str) -> str:
     """对生产订单执行技术关闭（TECO）操作。"""
     try:
         get_url = f"{SAP_PROD_BASE_URL}/A_ProductionOrder_2('{manufacturing_order}')?$format=json"
-        get_resp = httpx.get(get_url, auth=get_auth(), headers={"Accept": "application/json"}, verify=True)
+        get_resp = httpx.get(get_url, auth=get_auth(), headers={"Accept": "application/json"}, verify=True, timeout=60)
         etag = get_resp.headers.get("ETag", "*")
 
         token, cookies = get_csrf_token_prod()
@@ -2953,7 +2953,7 @@ def technically_complete_production_order(manufacturing_order: str) -> str:
             "x-csrf-token": token,
             "If-Match": etag,
         }
-        response = httpx.post(url, auth=get_auth(), headers=headers, cookies=cookies, verify=True)
+        response = httpx.post(url, auth=get_auth(), headers=headers, cookies=cookies, verify=True, timeout=60)
         if not response.is_success:
             try:
                 err = response.json()
@@ -3253,7 +3253,7 @@ def delivery_odata_get(path: str, params: dict = None) -> dict:
     if params is None:
         params = {}
     params["$format"] = "json"
-    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -3261,7 +3261,7 @@ def delivery_odata_get(path: str, params: dict = None) -> dict:
 def get_csrf_token_delivery() -> tuple[str, dict]:
     url = f"{SAP_DELIVERY_BASE_URL}/"
     headers = {"x-csrf-token": "Fetch", "Accept": "application/json"}
-    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True)
+    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True, timeout=60)
     token = response.headers.get("x-csrf-token", "")
     cookies = dict(response.cookies)
     return token, cookies
@@ -7843,7 +7843,7 @@ def appjob_get(path: str, params: dict = None) -> dict:
     headers = {"Accept": "application/json"}
     if params is None:
         params = {}
-    response = httpx.get(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, params=params, verify=True)
+    response = httpx.get(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, params=params, verify=True, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -7851,7 +7851,7 @@ def appjob_get(path: str, params: dict = None) -> dict:
 def get_csrf_token_appjob() -> tuple[str, dict]:
     url = f"{SAP_APPJOB_BASE_URL}/"
     headers = {"x-csrf-token": "Fetch", "Accept": "application/json"}
-    response = httpx.get(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, verify=True)
+    response = httpx.get(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, verify=True, timeout=60)
     token = response.headers.get("x-csrf-token", "")
     cookies = dict(response.cookies)
     return token, cookies
@@ -7865,7 +7865,7 @@ def appjob_post(path: str, payload: dict) -> dict:
         "Content-Type": "application/json",
         "x-csrf-token": token,
     }
-    response = httpx.post(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, json=payload, cookies=cookies, verify=True)
+    response = httpx.post(url, auth=(SAP_USERNAME, SAP_PASSWORD), headers=headers, json=payload, cookies=cookies, verify=True, timeout=60)
     if not response.is_success:
         try:
             err = response.json()
@@ -7968,7 +7968,7 @@ def _routing_get(path: str, params: dict = None) -> dict:
 
 def _routing_csrf() -> tuple[str, dict]:
     resp = httpx.get(f"{SAP_ROUTING_BASE_URL}/", auth=(SAP_USERNAME, SAP_PASSWORD),
-                     headers={"x-csrf-token": "Fetch", "Accept": "application/json"}, verify=True)
+                     headers={"x-csrf-token": "Fetch", "Accept": "application/json"}, verify=True, timeout=60)
     return resp.headers.get("x-csrf-token", ""), dict(resp.cookies)
 
 
@@ -8176,7 +8176,7 @@ def create_production_routing(
 
 def _prodver_csrf() -> tuple[str, dict]:
     resp = httpx.get(f"{SAP_PRODVER_BASE_URL}/", auth=(SAP_USERNAME, SAP_PASSWORD),
-                     headers={"x-csrf-token": "Fetch", "Accept": "application/json"}, verify=True)
+                     headers={"x-csrf-token": "Fetch", "Accept": "application/json"}, verify=True, timeout=60)
     return resp.headers.get("x-csrf-token", ""), dict(resp.cookies)
 
 
@@ -8318,7 +8318,30 @@ def update_production_version(
 
 # ── AR 收款工具 ────────────────────────────────────────────────
 
-SAP_JE_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata/sap/API_JOURNALENTRYITEMBASIC_SRV"
+SAP_BILLING_QUERY_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata4/sap/api_billingdocument/srvd_a2x/sap/billingdocument/0001/BillingDocument"
+
+
+def _get_fi_document_for_billing(billing_document: str) -> tuple[str, str]:
+    """通过开票凭证号查询对应的 FI 应收凭证号和财年，返回 (fi_doc, fi_year)。"""
+    try:
+        resp = httpx.get(
+            SAP_BILLING_QUERY_URL,
+            auth=get_auth(),
+            headers={"Accept": "application/json"},
+            params={
+                "$filter": f"BillingDocument eq '{billing_document}'",
+                "$select": "BillingDocument,AccountingDocument,FiscalYear",
+                "$top": "1",
+            },
+            verify=True, timeout=60, follow_redirects=True,
+        )
+        if resp.status_code == 200:
+            items = resp.json().get("value", [])
+            if items:
+                return items[0].get("AccountingDocument", ""), items[0].get("FiscalYear", "2026")
+    except Exception:
+        pass
+    return "", "2026"
 
 
 @mcp.tool()
@@ -8329,72 +8352,53 @@ def get_customer_open_items(
 ) -> str:
     """查询客户未清应收账款明细（尚未收款的开票FI凭证）。
 
-    返回该客户所有未清的 DR 客户项目，包括凭证号、金额、到期日，
+    通过 Billing Document API 查询该客户本财年的 F2 开票凭证及对应 FI 应收凭证号，
     供后续 post_customer_incoming_payment 使用。
     """
     try:
         resp = httpx.get(
-            f"{SAP_JE_BASE_URL}/A_JournalEntryItem",
+            SAP_BILLING_QUERY_URL,
             auth=get_auth(),
             headers={"Accept": "application/json"},
             params={
-                "$filter": (
-                    f"CompanyCode eq '{company_code}' "
-                    f"and Customer eq '{customer}' "
-                    f"and FiscalYear eq '{fiscal_year}' "
-                    f"and ClearingDate eq null"
-                ),
-                "$select": (
-                    "AccountingDocument,FiscalYear,AccountingDocumentItem,"
-                    "Customer,AmountInTransactionCurrency,TransactionCurrency,"
-                    "PostingDate,DueDate,DocumentReferenceID,AccountingDocumentType"
-                ),
-                "$format": "json",
+                "$filter": f"SoldToParty eq '{customer}' and BillingDocumentType eq 'F2'",
+                "$select": "BillingDocument,BillingDocumentType,AccountingDocument,FiscalYear,TotalNetAmount,TransactionCurrency,CreationDate",
                 "$top": "20",
-                "$orderby": "PostingDate desc",
+                "$orderby": "CreationDate desc",
             },
-            verify=True,
-            timeout=30,
+            verify=True, timeout=60, follow_redirects=True,
         )
         resp.raise_for_status()
-        items = resp.json().get("d", {}).get("results", [])
+        items = resp.json().get("value", [])
     except Exception as e:
         return f"查询失败: {e}"
 
+    # 按财年过滤
+    items = [it for it in items if it.get("FiscalYear", "") == fiscal_year]
+
     if not items:
-        return f"客户 {customer} 在公司代码 {company_code}/{fiscal_year} 无未清应收项目。"
+        return f"客户 {customer} 在财年 {fiscal_year} 无开票记录（F2）。"
 
-    def parse_date(val):
-        if not val:
-            return "—"
-        m = re.search(r"\d+", val)
-        return datetime.datetime.utcfromtimestamp(int(m.group()) / 1000).strftime("%Y-%m-%d") if m else val
-
-    lines = [f"客户 {customer} 未清应收账款（共 {len(items)} 条）：", ""]
+    lines = [f"客户 {customer} 应收开票明细（财年 {fiscal_year}，共 {len(items)} 条）：", ""]
     total = 0.0
     currency = ""
     for it in items:
-        amt_raw = it.get("AmountInTransactionCurrency", "0")
-        try:
-            amt = float(amt_raw)
-        except Exception:
-            amt = 0.0
+        amt = float(it.get("TotalNetAmount", 0) or 0)
         cur = it.get("TransactionCurrency", "")
         currency = cur
         total += amt
+        date_str = str(it.get("CreationDate", ""))[:10]
         lines.append(
-            f"  凭证: {it.get('AccountingDocument','')}/{it.get('FiscalYear','')} "
-            f"  行: {it.get('AccountingDocumentItem','')}  "
-            f"  类型: {it.get('AccountingDocumentType','')}  "
-            f"  金额: {amt:.2f} {cur}  "
-            f"  过账日: {parse_date(it.get('PostingDate',''))}  "
-            f"  到期日: {parse_date(it.get('DueDate',''))}  "
-            f"  参考: {it.get('DocumentReferenceID','')}"
+            f"  开票凭证: {it.get('BillingDocument','')}  "
+            f"FI应收凭证: {it.get('AccountingDocument','')}  "
+            f"财年: {it.get('FiscalYear','')}  "
+            f"金额: {amt:.2f} {cur}  "
+            f"开票日: {date_str}"
         )
-    lines += ["", f"  合计未清金额: {total:.2f} {currency}"]
+    lines += ["", f"  合计: {total:.2f} {currency}"]
     lines += [
         "",
-        "提示：使用 post_customer_incoming_payment 传入 billing_fi_document 进行收款清账。",
+        "提示：使用 post_customer_incoming_payment 传入 billing_document（开票凭证号）即可自动查出 FI 凭证并清账。",
     ]
     return "\n".join(lines)
 
@@ -8406,6 +8410,7 @@ def post_customer_incoming_payment(
     currency_code: str = "USD",
     company_code: str = "1710",
     bank_gl_account: str = "10010000",
+    billing_document: str = "",
     billing_fi_document: str = "",
     billing_fi_year: str = "2026",
     billing_fi_item: int = 1,
@@ -8416,16 +8421,26 @@ def post_customer_incoming_payment(
     标准 AR 收款流程：开票(F2) → FI应收凭证 → 客户汇款 → 本工具过账DZ → 清账。
 
     参数：
-    - customer: 客户代码（如 USCU_L01）
+    - customer: 客户代码
     - amount: 收款金额（正数）
     - currency_code: 币种（如 USD、CNY）
     - bank_gl_account: 银行科目（借方，默认 10010000）
-    - billing_fi_document: 关联的开票FI凭证号（用于自动清账）
+    - billing_document: 开票凭证号（如 90001861），系统自动查出对应 FI 应收凭证号
+    - billing_fi_document: 直接指定 FI 应收凭证号（与 billing_document 二选一）
     - billing_fi_year: FI凭证财年
     - billing_fi_item: FI凭证行项目号（通常为 1）
     - reference: 付款参考号/银行流水号
     """
     import uuid
+
+    # 如果提供了开票凭证号，自动查出对应 FI 应收凭证号
+    if billing_document and not billing_fi_document:
+        fi_doc, fi_year = _get_fi_document_for_billing(billing_document)
+        if fi_doc:
+            billing_fi_document = fi_doc
+            billing_fi_year = fi_year
+        else:
+            return f"无法查到开票凭证 {billing_document} 对应的 FI 应收凭证，请直接传入 billing_fi_document 参数。"
 
     today = datetime.date.today().isoformat()
     msg_id = f"uuid:DZ-{uuid.uuid4()}"
