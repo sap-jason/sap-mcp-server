@@ -6,6 +6,12 @@ import re
 import base64
 import subprocess
 import time
+import imaplib
+import smtplib
+import email as email_lib
+from email.header import decode_header
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from mcp.server.fastmcp import FastMCP
 
 SAP_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata/sap/API_SALES_ORDER_SRV"
@@ -8639,6 +8645,238 @@ def clear_customer_open_items(
         f"\n"
         f"验证：使用 get_customer_open_items 确认该凭证已从未清项移除。"
     )
+
+
+# ─────────────────────────────────────────────
+# 邮件工具（163 IMAP / SMTP）
+# ─────────────────────────────────────────────
+
+EMAIL_ACCOUNT = os.environ.get("EMAIL_ACCOUNT", "sapordermail@163.com")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+IMAP_HOST = "imap.163.com"
+IMAP_PORT = 993
+SMTP_HOST = "smtp.163.com"
+SMTP_PORT = 465
+
+
+def _decode_str(s) -> str:
+    if s is None:
+        return ""
+    parts = decode_header(s)
+    result = []
+    for b, enc in parts:
+        if isinstance(b, bytes):
+            result.append(b.decode(enc or "utf-8", errors="replace"))
+        else:
+            result.append(b)
+    return "".join(result)
+
+
+def _get_imap() -> imaplib.IMAP4_SSL:
+    M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    M.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+    return M
+
+
+def _parse_message(raw: bytes) -> dict:
+    msg = email_lib.message_from_bytes(raw)
+    subject = _decode_str(msg.get("Subject", ""))
+    from_ = _decode_str(msg.get("From", ""))
+    to_ = _decode_str(msg.get("To", ""))
+    date_ = msg.get("Date", "")
+    body = ""
+    attachments = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            cd = part.get("Content-Disposition", "")
+            if ct in ("text/plain", "text/html") and "attachment" not in cd:
+                if not body:
+                    body = part.get_payload(decode=True).decode(
+                        part.get_content_charset() or "utf-8", errors="replace"
+                    )
+            elif "attachment" in cd or part.get_filename():
+                attachments.append(_decode_str(part.get_filename() or "unknown"))
+    else:
+        body = msg.get_payload(decode=True).decode(
+            msg.get_content_charset() or "utf-8", errors="replace"
+        )
+    return {
+        "subject": subject,
+        "from": from_,
+        "to": to_,
+        "date": date_,
+        "body": body[:3000],
+        "attachments": attachments,
+    }
+
+
+@mcp.tool()
+def list_emails(folder: str = "INBOX", count: int = 20) -> str:
+    """列出邮箱中最近的邮件。
+    folder: 文件夹名称，默认 INBOX（收件箱）；其他常用值：Sent（已发送）、Drafts（草稿）
+    count: 返回最近几封，默认 20，最多 50
+    """
+    count = min(count, 50)
+    try:
+        M = _get_imap()
+        M.select(folder)
+        _, data = M.search(None, "ALL")
+        ids = data[0].split()
+        ids = ids[-count:][::-1]
+        results = []
+        for uid in ids:
+            _, raw = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+            msg = email_lib.message_from_bytes(raw[0][1])
+            results.append({
+                "id": uid.decode(),
+                "subject": _decode_str(msg.get("Subject", "")),
+                "from": _decode_str(msg.get("From", "")),
+                "date": msg.get("Date", ""),
+            })
+        M.logout()
+        lines = [f"[{r['id']}] {r['date']}\n  主题：{r['subject']}\n  发件人：{r['from']}" for r in results]
+        return f"文件夹 {folder} 最近 {len(results)} 封邮件：\n\n" + "\n\n".join(lines)
+    except Exception as e:
+        return f"获取邮件列表失败：{e}"
+
+
+@mcp.tool()
+def get_email(email_id: str, folder: str = "INBOX") -> str:
+    """读取指定邮件的完整内容（正文+附件列表）。
+    email_id: 邮件序号，从 list_emails 获取
+    folder: 邮件所在文件夹，默认 INBOX
+    """
+    try:
+        M = _get_imap()
+        M.select(folder)
+        _, raw = M.fetch(email_id.encode(), "(RFC822)")
+        if not raw or raw[0] is None:
+            return f"未找到邮件 ID={email_id}"
+        parsed = _parse_message(raw[0][1])
+        M.logout()
+        att_str = "、".join(parsed["attachments"]) if parsed["attachments"] else "无"
+        return (
+            f"主题：{parsed['subject']}\n"
+            f"发件人：{parsed['from']}\n"
+            f"收件人：{parsed['to']}\n"
+            f"时间：{parsed['date']}\n"
+            f"附件：{att_str}\n\n"
+            f"正文：\n{parsed['body']}"
+        )
+    except Exception as e:
+        return f"读取邮件失败：{e}"
+
+
+@mcp.tool()
+def search_emails(keyword: str = "", sender: str = "", since_date: str = "", folder: str = "INBOX", count: int = 20) -> str:
+    """搜索邮件。
+    keyword: 主题关键词（可为空）
+    sender: 发件人地址或名称（可为空）
+    since_date: 起始日期，格式 YYYY-MM-DD（可为空）
+    folder: 文件夹，默认 INBOX
+    count: 最多返回几封，默认 20
+    """
+    count = min(count, 50)
+    try:
+        M = _get_imap()
+        M.select(folder)
+        criteria = []
+        if keyword:
+            criteria.append(f'SUBJECT "{keyword}"')
+        if sender:
+            criteria.append(f'FROM "{sender}"')
+        if since_date:
+            try:
+                dt = datetime.datetime.strptime(since_date, "%Y-%m-%d")
+                criteria.append(f'SINCE "{dt.strftime("%d-%b-%Y")}"')
+            except ValueError:
+                pass
+        search_str = " ".join(criteria) if criteria else "ALL"
+        _, data = M.search(None, search_str)
+        ids = data[0].split()
+        ids = ids[-count:][::-1]
+        results = []
+        for uid in ids:
+            _, raw = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+            msg = email_lib.message_from_bytes(raw[0][1])
+            results.append({
+                "id": uid.decode(),
+                "subject": _decode_str(msg.get("Subject", "")),
+                "from": _decode_str(msg.get("From", "")),
+                "date": msg.get("Date", ""),
+            })
+        M.logout()
+        if not results:
+            return "未找到符合条件的邮件。"
+        lines = [f"[{r['id']}] {r['date']}\n  主题：{r['subject']}\n  发件人：{r['from']}" for r in results]
+        return f"搜索结果（共 {len(results)} 封）：\n\n" + "\n\n".join(lines)
+    except Exception as e:
+        return f"搜索邮件失败：{e}"
+
+
+@mcp.tool()
+def reply_email(email_id: str, body: str, folder: str = "INBOX") -> str:
+    """回复指定邮件。
+    email_id: 要回复的邮件序号（从 list_emails / search_emails 获取）
+    body: 回复正文内容
+    folder: 原邮件所在文件夹，默认 INBOX
+    """
+    try:
+        M = _get_imap()
+        M.select(folder)
+        _, raw = M.fetch(email_id.encode(), "(RFC822)")
+        if not raw or raw[0] is None:
+            return f"未找到邮件 ID={email_id}"
+        orig = email_lib.message_from_bytes(raw[0][1])
+        M.logout()
+
+        to_addr = _decode_str(orig.get("Reply-To") or orig.get("From", ""))
+        subject = _decode_str(orig.get("Subject", ""))
+        if not subject.lower().startswith("re:"):
+            subject = "Re: " + subject
+        msg_id = orig.get("Message-ID", "")
+
+        reply = MIMEMultipart()
+        reply["From"] = EMAIL_ACCOUNT
+        reply["To"] = to_addr
+        reply["Subject"] = subject
+        if msg_id:
+            reply["In-Reply-To"] = msg_id
+            reply["References"] = msg_id
+        reply.attach(MIMEText(body, "plain", "utf-8"))
+
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
+            s.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+            s.sendmail(EMAIL_ACCOUNT, [to_addr], reply.as_string())
+
+        return f"✅ 已回复邮件：{subject}（收件人：{to_addr}）"
+    except Exception as e:
+        return f"回复邮件失败：{e}"
+
+
+@mcp.tool()
+def send_email(to: str, subject: str, body: str) -> str:
+    """发送新邮件。
+    to: 收件人地址（多个收件人用英文逗号分隔）
+    subject: 邮件主题
+    body: 邮件正文
+    """
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_ACCOUNT
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        recipients = [a.strip() for a in to.split(",")]
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
+            s.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+            s.sendmail(EMAIL_ACCOUNT, recipients, msg.as_string())
+
+        return f"✅ 邮件已发送：{subject}（收件人：{to}）"
+    except Exception as e:
+        return f"发送邮件失败：{e}"
 
 
 if __name__ == "__main__":
