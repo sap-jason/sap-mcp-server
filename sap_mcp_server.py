@@ -2794,8 +2794,11 @@ def list_production_orders(top: int = 10, filter: str = "") -> str:
 
 @mcp.tool()
 def get_production_order(manufacturing_order: str) -> str:
-    """根据生产订单号获取详细信息。"""
-    data = prod_odata_get(f"/A_ProductionOrder_2('{manufacturing_order}')")
+    """根据生产订单号获取详细信息，包含系统状态。"""
+    data = prod_odata_get(
+        f"/A_ProductionOrder_2('{manufacturing_order}')",
+        params={"$expand": "to_ProductionOrderStatus"}
+    )
     order = data.get("d", {})
     if not order:
         return f"找不到生产订单 {manufacturing_order}。"
@@ -2806,6 +2809,16 @@ def get_production_order(manufacturing_order: str) -> str:
         "MfgOrderPlannedEndDate", "MfgOrderScheduledStartDate", "MfgOrderScheduledEndDate",
     ]
     result = {k: order.get(k, "") for k in keys if k in order}
+    status_list = order.get("to_ProductionOrderStatus", {}).get("results", [])
+    result["SystemStatus"] = " / ".join(
+        f"{s.get('StatusShortName')}({s.get('StatusName')})"
+        for s in status_list if not s.get("IsUserStatus")
+    )
+    user_status = [s for s in status_list if s.get("IsUserStatus")]
+    if user_status:
+        result["UserStatus"] = " / ".join(
+            f"{s.get('StatusShortName')}({s.get('StatusName')})" for s in user_status
+        )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
