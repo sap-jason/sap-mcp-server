@@ -1669,6 +1669,63 @@ def _post_material_document(
 
 
 @mcp.tool()
+def goods_issue_sto_cross_company(
+    material: str,
+    quantity: float,
+    supplying_plant: str,
+    receiving_plant: str,
+    supplier: str,
+    purchase_order: str,
+    purchase_order_item: str = "1",
+    storage_location: str = "",
+    batch: str = "",
+    unit: str = "PC",
+    posting_date: str = "",
+) -> str:
+    """跨公司库存转储（STO）发货，使用 MT543，必须传入供应商编号。
+    supplying_plant: 发货工厂（如 1710）
+    receiving_plant: 收货工厂（如 1310）
+    supplier: 供应商编号（如 17401710，即发货工厂对应的供应商）
+    purchase_order: 跨公司采购订单号
+    purchase_order_item: 采购订单行项目，默认 1
+    """
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    post_date = posting_date or today
+
+    item = {
+        "Material": material,
+        "Plant": supplying_plant,
+        "EntryUnit": unit,
+        "QuantityInEntryUnit": str(quantity),
+        "Supplier": supplier,
+        "PurchaseOrder": purchase_order,
+        "PurchaseOrderItem": str(purchase_order_item).zfill(5),
+        "GoodsMovementRefDocType": "B",
+        "DestinationPlant": receiving_plant,
+    }
+    if storage_location:
+        item["StorageLocation"] = storage_location
+    if batch:
+        item["Batch"] = batch
+
+    result = _post_material_document("543", "02", item, post_date,
+                                     f"STO GI {supplying_plant}->{receiving_plant}")
+    if not result["ok"]:
+        return f"跨公司STO发货（MT543）失败: {result['error']}"
+
+    return (
+        f"✅ 跨公司STO发货成功（MT543）\n"
+        f"物料凭证: {result['mat_doc']} / {result['mat_year']}\n"
+        f"物料: {material} | 数量: {quantity} {unit}\n"
+        f"发货工厂: {supplying_plant}"
+        + (f" | 库位: {storage_location}" if storage_location else "")
+        + (f" | 批次: {batch}" if batch else "")
+        + f"\n收货工厂: {receiving_plant} | 供应商: {supplier}\n"
+        f"采购订单: {purchase_order} / 行项目: {purchase_order_item}"
+    )
+
+
+@mcp.tool()
 def post_goods_movement(
     movement_type: str,
     material: str,
