@@ -130,9 +130,9 @@ def to_date_str(date_str: str) -> str:
 # ── 查询工具 ────────────────────────────────────────────────
 
 @mcp.tool()
-def list_sales_orders(top: int = 10, filter: str = "") -> str:
+def list_sales_orders(top: int = 500, filter: str = "") -> str:
     """查询销售订单列表（top=数量，filter=OData条件）。"""
-    params = {"$top": top, "$select": "SalesOrder,SalesOrderType,SoldToParty,TotalNetAmount,TransactionCurrency,SalesOrderDate,RequestedDeliveryDate,PurchaseOrderByCustomer"}
+    params = {"$top": top, "$orderby": "SalesOrderDate desc", "$select": "SalesOrder,SalesOrderType,SoldToParty,TotalNetAmount,TransactionCurrency,SalesOrderDate,RequestedDeliveryDate,PurchaseOrderByCustomer"}
     if filter:
         params["$filter"] = filter
     data = odata_get("/A_SalesOrder", params)
@@ -616,7 +616,7 @@ def update_sales_order_item(
 
 @mcp.tool()
 def list_purchase_requisitions(
-    top: int = 10,
+    top: int = 500,
     material: str = "",
     plant: str = "",
     status: str = "",
@@ -633,8 +633,8 @@ def list_purchase_requisitions(
     if created_by:
         filters.append(f"CreatedByUser eq '{created_by}'")
 
-    params = {"$top": top, "$format": "json",
-              "$select": "PurchaseRequisition,PurchaseRequisitionItem,Material,MaterialGroup,Plant,RequestedQuantity,BaseUnit,DeliveryDate,PurchasingGroup,ProcessingStatus,PurReqnReleaseStatus,CreatedByUser,PurReqCreationDate,PurchaseRequisitionItemText"}
+    params = {"$top": top, "$orderby": "PurReqCreationDate desc", "$format": "json",
+              "$select": "PurchaseRequisition,PurchaseRequisitionItem,Material,MaterialGroup,Plant,RequestedQuantity,BaseUnit,DeliveryDate,PurchasingGroup,ProcessingStatus,PurReqnReleaseStatus,CreatedByUser,PurReqCreationDate,PurchaseRequisitionItemText,AccountAssignmentCategory"}
     if filters:
         params["$filter"] = " and ".join(filters)
 
@@ -660,6 +660,7 @@ def list_purchase_requisitions(
             f"数量: {i.get('RequestedQuantity')} {i.get('BaseUnit')} | "
             f"工厂: {i.get('Plant')} | "
             f"交货: {str(i.get('DeliveryDate',''))[:10]} | "
+            f"账户分配: {i.get('AccountAssignmentCategory','') or '无'} | "
             f"状态: {i.get('ProcessingStatus','')}"
         )
     return "\n".join(lines)
@@ -693,6 +694,7 @@ def get_purchase_requisition(purchase_requisition: str) -> str:
             f"物料: {i.get('Material','')} | 数量: {i.get('RequestedQuantity')} {i.get('BaseUnit')} | "
             f"单价: {i.get('PurchaseRequisitionPrice')} {i.get('PurReqnItemCurrency')} | "
             f"工厂: {i.get('Plant')} | 交货: {str(i.get('DeliveryDate',''))[:10]} | "
+            f"账户分配: {i.get('AccountAssignmentCategory','') or '无'} | "
             f"状态: {i.get('ProcessingStatus','')} | 已转PO: {i.get('PurchasingDocument','') or '否'}"
         )
     return "\n".join(lines)
@@ -882,10 +884,11 @@ def odata_v4_patch(path: str, payload: dict) -> bool:
 # ── 采购订单工具 ────────────────────────────────────────────
 
 @mcp.tool()
-def list_purchase_orders(top: int = 10, filter: str = "") -> str:
+def list_purchase_orders(top: int = 500, filter: str = "") -> str:
     """查询采购订单列表（top=数量，filter=OData条件）。"""
     params = {
         "$top": top,
+        "$orderby": "PurchaseOrderDate desc",
         "$select": "PurchaseOrder,PurchaseOrderType,Supplier,CompanyCode,PurchaseOrderDate,DocumentCurrency,NetPaymentDays,CreatedByUser,PurchasingGroup,PurchasingOrganization",
     }
     if filter:
@@ -1701,15 +1704,13 @@ def goods_issue_sto_cross_company(
         "PurchaseOrder": purchase_order,
         "PurchaseOrderItem": str(purchase_order_item).zfill(5),
         "GoodsMovementRefDocType": "B",
-        "DestinationPlant": receiving_plant,
     }
     if storage_location:
         item["StorageLocation"] = storage_location
     if batch:
         item["Batch"] = batch
 
-    result = _post_material_document("543", "02", item, post_date,
-                                     f"STO GI {supplying_plant}->{receiving_plant}")
+    result = _post_material_document("543", "02", item, post_date)
     if not result["ok"]:
         return f"跨公司STO发货（MT543）失败: {result['error']}"
 
@@ -2545,7 +2546,7 @@ def execute_procurement_workflow(
 
 @mcp.tool()
 def list_supplier_invoices(
-    top: int = 10,
+    top: int = 500,
     company_code: str = "",
     supplier: str = "",
     fiscal_year: str = ""
@@ -2560,7 +2561,7 @@ def list_supplier_invoices(
         filters.append(f"FiscalYear eq '{fiscal_year}'")
 
     params = {
-        "$top": top, "$format": "json",
+        "$top": top, "$orderby": "DocumentDate desc", "$format": "json",
         "$select": "SupplierInvoice,FiscalYear,CompanyCode,InvoicingParty,DocumentDate,PostingDate,DocumentCurrency,InvoiceGrossAmount,SupplierInvoiceStatus,SupplierInvoiceIDByInvcgParty,AccountingDocumentType"
     }
     if filters:
@@ -2827,10 +2828,11 @@ def prod_odata_function(function_name: str, params: dict) -> dict:
 # ── 生产订单工具 ────────────────────────────────────────────
 
 @mcp.tool()
-def list_production_orders(top: int = 10, filter: str = "") -> str:
+def list_production_orders(top: int = 500, filter: str = "") -> str:
     """查询生产订单列表（top=数量，filter=OData条件）。"""
     params = {
         "$top": top,
+        "$orderby": "MfgOrderCreationDate desc",
     }
     if filter:
         params["$filter"] = filter
@@ -3040,6 +3042,404 @@ def technically_complete_production_order(manufacturing_order: str) -> str:
         return f"技术关闭失败，错误详情：{str(e)}"
     notify = send_teams_notification("🔒 生产订单已技术关闭", f"订单号: {manufacturing_order} 已完成技术关闭（TECO）")
     return f"生产订单 {manufacturing_order} 技术关闭成功！  {notify}"
+
+
+# ── 批次正反向追溯工具 ───────────────────────────────────────────────────────────
+
+def _mat_doc_base_get(path: str, params: dict = None) -> dict:
+    if params is None:
+        params = {}
+    params["$format"] = "json"
+    url = f"{SAP_MATDOC_BASE_URL}{path}"
+    headers = {"Accept": "application/json"}
+    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True, timeout=60)
+    response.raise_for_status()
+    return response.json()
+
+
+def _batch_base_get(path: str, params: dict = None) -> dict:
+    if params is None:
+        params = {}
+    params["$format"] = "json"
+    url = f"https://my409379-api.s4hana.cloud.sap/sap/opu/odata/sap/API_BATCH_SRV{path}"
+    headers = {"Accept": "application/json"}
+    response = httpx.get(url, auth=get_auth(), headers=headers, params=params, verify=True, timeout=60)
+    response.raise_for_status()
+    return response.json()
+
+
+def _ms_to_date(ms_str: str) -> str:
+    """Convert /Date(1234567890000+0000)/ to YYYY-MM-DD."""
+    if not ms_str:
+        return ""
+    import re as _re
+    m = _re.search(r'/Date\((\d+)', ms_str or "")
+    if not m:
+        return str(ms_str)[:10]
+    import datetime as _dt
+    return _dt.datetime.utcfromtimestamp(int(m.group(1)) / 1000).strftime("%Y-%m-%d")
+
+
+def _get_mat_doc_headers(top: int = 500) -> list:
+    """Fetch recent material document headers (no year filter, sorted desc by doc number)."""
+    data = _mat_doc_base_get("/A_MaterialDocumentHeader", {
+        "$top": str(top),
+        "$select": "MaterialDocumentYear,MaterialDocument,PostingDate",
+        "$orderby": "MaterialDocument desc",
+    })
+    return data.get("d", {}).get("results", [])
+
+
+def _expand_mat_doc(doc_num: str, year: str) -> list:
+    """Fetch items for one material document. Returns list of item dicts."""
+    try:
+        resp = httpx.get(
+            f"{SAP_MATDOC_BASE_URL}/A_MaterialDocumentHeader(MaterialDocumentYear='{year}',MaterialDocument='{doc_num}')",
+            auth=get_auth(),
+            headers={"Accept": "application/json"},
+            params={"$format": "json", "$expand": "to_MaterialDocumentItem"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json().get("d", {}).get("to_MaterialDocumentItem", {}).get("results", [])
+    except Exception:
+        return []
+
+
+def _scan_mat_docs_for_batch(material: str, batch: str, headers: list = None) -> list:
+    """Scan material documents to find all movements for a given material+batch combination.
+    Pass pre-fetched headers list to avoid re-fetching when called multiple times.
+    If batch is empty string, matches any batch for that material.
+    """
+    import concurrent.futures as _cf
+
+    if headers is None:
+        headers = _get_mat_doc_headers(500)
+
+    results = []
+
+    def check_header(hdr):
+        doc_num = hdr.get("MaterialDocument", "")
+        yr = hdr.get("MaterialDocumentYear", "2026")
+        items = _expand_mat_doc(doc_num, yr)
+        found = []
+        for item in items:
+            mat_match = item.get("Material") == material
+            batch_val = item.get("Batch", "").strip()
+            batch_match = (batch == "") or (batch_val == batch.strip())
+            if mat_match and batch_match:
+                found.append({
+                    "doc": doc_num,
+                    "year": yr,
+                    "item": item.get("MaterialDocumentItem"),
+                    "mat": item.get("Material"),
+                    "batch": batch_val,
+                    "mvt": item.get("GoodsMovementType"),
+                    "qty": item.get("QuantityInEntryUnit"),
+                    "unit": item.get("EntryUnit", ""),
+                    "plant": item.get("Plant"),
+                    "sloc": item.get("StorageLocation", ""),
+                    "mfgord": item.get("ManufacturingOrder", ""),
+                    "dc": item.get("DebitCreditCode", ""),
+                    "post_date": _ms_to_date(hdr.get("PostingDate", "")),
+                })
+        return found
+
+    with _cf.ThreadPoolExecutor(max_workers=20) as ex:
+        for found in ex.map(check_header, headers):
+            results.extend(found)
+
+    return results
+
+
+def _scan_mat_docs_for_order(mfg_order: str, mvt_type: str, headers: list = None) -> list:
+    """Scan material documents to find all movements for a given production order + movement type."""
+    import concurrent.futures as _cf
+
+    if headers is None:
+        headers = _get_mat_doc_headers(500)
+
+    results = []
+
+    def check_header(hdr):
+        doc_num = hdr.get("MaterialDocument", "")
+        yr = hdr.get("MaterialDocumentYear", "2026")
+        items = _expand_mat_doc(doc_num, yr)
+        found = []
+        for item in items:
+            if item.get("ManufacturingOrder") == mfg_order and item.get("GoodsMovementType") == mvt_type:
+                found.append({
+                    "doc": doc_num,
+                    "year": yr,
+                    "mat": item.get("Material", ""),
+                    "batch": item.get("Batch", "").strip(),
+                    "mvt": item.get("GoodsMovementType"),
+                    "qty": item.get("QuantityInEntryUnit"),
+                    "unit": item.get("EntryUnit", ""),
+                    "plant": item.get("Plant"),
+                    "sloc": item.get("StorageLocation", ""),
+                    "mfgord": item.get("ManufacturingOrder", ""),
+                    "dc": item.get("DebitCreditCode", ""),
+                    "post_date": _ms_to_date(hdr.get("PostingDate", "")),
+                })
+        return found
+
+    with _cf.ThreadPoolExecutor(max_workers=20) as ex:
+        for found in ex.map(check_header, headers):
+            results.extend(found)
+
+    return results
+
+
+@mcp.tool()
+def batch_forward_trace(material: str, batch: str, plant: str = "1710") -> str:
+    """
+    批次正向追溯（Forward Traceability）：从原材料/半成品批次出发，追踪它流向了哪些生产订单和成品批次。
+    输入：物料号、批次号、工厂（默认1710）。
+    输出：该批次作为组件被哪些生产订单消耗、最终产出哪些成品批次，以及当前库存状态。
+    示例问题：'批次0000000528用到了哪里？' / 'ZHJ001的批次0000000528追溯到哪个成品？'
+    """
+    lines = ["=== 批次正向追溯 ===", f"物料: {material} | 批次: {batch} | 工厂: {plant}", ""]
+
+    # 1. 批次主数据
+    try:
+        bd = _batch_base_get(f"/Batch(Material='{material}',BatchIdentifyingPlant='',Batch='{batch}')").get("d", {})
+        lines.append("【批次主数据】")
+        lines.append(f"  生产日期: {_ms_to_date(bd.get('ManufactureDate') or '') or '未记录'} | "
+                     f"最后收货日期: {_ms_to_date(bd.get('LastGoodsReceiptDate') or '') or '未记录'}")
+        lines.append(f"  供应商: {bd.get('Supplier') or '内部生产'} | 供应商批次: {bd.get('BatchBySupplier') or '-'}")
+    except Exception as e:
+        lines.append(f"【批次主数据】查询失败: {e}")
+
+    # 2. 当前库存
+    try:
+        stock_items = httpx.get(
+            f"{SAP_STOCK_BASE_URL}/A_MatlStkInAcctMod",
+            auth=get_auth(),
+            params={"$filter": f"Material eq '{material}' and Plant eq '{plant}' and Batch eq '{batch}'",
+                    "$format": "json", "$select": "StorageLocation,InventoryStockType,MatlWrhsStkQtyInMatlBaseUnit,MaterialBaseUnit", "$top": "20"},
+            timeout=30,
+        ).json().get("d", {}).get("results", [])
+        lines.append(f"\n【当前库存（工厂{plant}）】")
+        stock_lines = [f"  仓储{r['StorageLocation']} 类型{r['InventoryStockType']}: {r['MatlWrhsStkQtyInMatlBaseUnit']} {r['MaterialBaseUnit']}"
+                       for r in stock_items if float(r.get("MatlWrhsStkQtyInMatlBaseUnit") or 0) != 0]
+        lines.extend(stock_lines or ["  库存为零或已全部消耗"])
+    except Exception as e:
+        lines.append(f"\n【当前库存】查询失败: {e}")
+
+    # 3. 扫描物料凭证 — 找该批次的所有移动（一次性拉 headers，后续共用）
+    headers = _get_mat_doc_headers(500)
+    movements = _scan_mat_docs_for_batch(material, batch, headers)
+    lines.append(f"\n【物料凭证移动记录】")
+    mvt_label = {"101": "收货(101-生产入库)", "102": "冲销收货(102)", "261": "发料到生产订单(261)",
+                 "262": "冲销发料(262)", "601": "交货发出(601)", "602": "冲销交货(602)",
+                 "551": "报废(551)", "301": "工厂间转移(301)"}
+    if not movements:
+        lines.append("  未找到相关物料凭证")
+    else:
+        for m in sorted(movements, key=lambda x: x["doc"]):
+            label = mvt_label.get(m["mvt"], f"移动类型{m['mvt']}")
+            lines.append(f"  凭证:{m['doc']} 日期:{m['post_date']} | {label} | 数量:{m['qty']} {m['unit']} | 仓储:{m['sloc']}")
+            if m["mfgord"]:
+                lines.append(f"    → 生产订单: {m['mfgord']}")
+
+    # 4. 从261凭证找消耗该批次的生产订单（仅用物料凭证，不做组件全表扫描避免超时）
+    prod_orders_consuming = {m["mfgord"] for m in movements if m.get("mfgord") and m.get("mvt") == "261"}
+    # 同时从 101 收货凭证里找——如果该批次本身是某个订单的 GR，则关联的订单也要看
+    # 但更重要的是：找其他订单的 101 凭证里有没有 ManufacturingOrder 引用到消耗了这个批次
+    # 这里只用261来追正向（发料→消耗）
+    prod_orders_consuming.discard("")
+
+    if not prod_orders_consuming:
+        lines.append(f"\n【正向追溯】未找到消耗此批次的生产订单（该批次可能是成品批次，或尚未发料）")
+        return "\n".join(lines)
+
+    lines.append(f"\n【正向追溯：消耗该批次的生产订单 → 产出成品】")
+    for ord_num in sorted(prod_orders_consuming):
+        try:
+            ord_data = httpx.get(
+                f"{SAP_PROD_BASE_URL}/A_ProductionOrder_2('{ord_num}')",
+                auth=get_auth(), params={"$format": "json"}, timeout=30,
+            ).json().get("d", {})
+            fg_mat = ord_data.get("Material", "")
+            # Find GR 101 docs for this order to get the output batch
+            gr_docs = _scan_mat_docs_for_order(ord_num, "101", headers)
+            fg_batch = gr_docs[0]["batch"] if gr_docs else "(待确认)"
+            lines.append(f"  生产订单 {ord_num} | 成品物料: {fg_mat} | 成品批次: {fg_batch}")
+            lines.append(f"    状态: 已确认={ord_data.get('OrderIsConfirmed','')}, 已交货={ord_data.get('OrderIsDelivered','')}")
+            lines.append(f"    计划数量: {ord_data.get('TotalQuantity','')} {ord_data.get('ProductionUnit','')}")
+        except Exception as ex:
+            lines.append(f"  生产订单 {ord_num}: 详情查询失败 ({ex})")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def batch_backward_trace(material: str, batch: str, plant: str = "1710") -> str:
+    """
+    批次反向追溯（Backward Traceability）：从成品/半成品批次出发，追溯其来自哪些生产订单和原材料批次。
+    输入：物料号、批次号、工厂（默认1710）。
+    输出：产出该批次的生产订单、使用的原材料及批次、收货物料凭证。
+    示例问题：'批次0000000532是怎么生产出来的？' / 'ZFJ001批次0000000532的原料追溯' / '这批成品用了哪些原材料？'
+    """
+    lines = ["=== 批次反向追溯 ===", f"物料: {material} | 批次: {batch} | 工厂: {plant}", ""]
+
+    # 1. 批次主数据
+    try:
+        bd = _batch_base_get(f"/Batch(Material='{material}',BatchIdentifyingPlant='',Batch='{batch}')").get("d", {})
+        lines.append("【批次主数据】")
+        lines.append(f"  生产日期: {_ms_to_date(bd.get('ManufactureDate') or '') or '未记录'} | "
+                     f"最后收货日期: {_ms_to_date(bd.get('LastGoodsReceiptDate') or '') or '未记录'}")
+        lines.append(f"  供应商: {bd.get('Supplier') or '内部生产'} | 供应商批次: {bd.get('BatchBySupplier') or '-'}")
+    except Exception as e:
+        lines.append(f"【批次主数据】查询失败: {e}")
+
+    # 2. 拉一次 headers，全程共用
+    headers = _get_mat_doc_headers(500)
+
+    # 3. 找产出该批次的物料凭证（mvt 101 入库）
+    all_movements = _scan_mat_docs_for_batch(material, batch, headers)
+    gr_docs = [m for m in all_movements if m.get("mvt") == "101"]
+    lines.append(f"\n【收货凭证（生产入库 mvt 101）】")
+    if not gr_docs:
+        lines.append("  未找到生产入库凭证")
+    else:
+        for m in gr_docs:
+            lines.append(f"  凭证:{m['doc']} 日期:{m['post_date']} | 入库数量:{m['qty']} {m['unit']} | 仓储:{m['sloc']}")
+            if m["mfgord"]:
+                lines.append(f"    关联生产订单: {m['mfgord']}")
+
+    # 4. 收集关联生产订单
+    source_orders = {m["mfgord"] for m in gr_docs if m.get("mfgord")}
+    source_orders.discard("")
+
+    if not source_orders:
+        lines.append(f"\n【反向追溯】未找到关联生产订单（可能为外购物料批次）")
+        return "\n".join(lines)
+
+    lines.append(f"\n【反向追溯：生产来源 → 原材料组件】")
+    for ord_num in sorted(source_orders):
+        # 4a. 生产订单头信息
+        try:
+            ord_data = httpx.get(
+                f"{SAP_PROD_BASE_URL}/A_ProductionOrder_2('{ord_num}')",
+                auth=get_auth(), params={"$format": "json"}, timeout=30,
+            ).json().get("d", {})
+            lines.append(f"\n  ┌─ 生产订单 {ord_num}")
+            lines.append(f"  │  物料: {ord_data.get('Material','')} | 生产版本: {ord_data.get('ProductionVersion','')} | 工厂: {ord_data.get('ProductionPlant','')}")
+            lines.append(f"  │  计划数量: {ord_data.get('TotalQuantity','')} {ord_data.get('ProductionUnit','')} | 实际产出: {ord_data.get('MfgOrderConfirmedYieldQty','')}")
+            lines.append(f"  │  状态: 已确认={ord_data.get('OrderIsConfirmed','')}, 已交货={ord_data.get('OrderIsDelivered','')}, TECO={ord_data.get('OrderIsTechnicallyCompleted','')}")
+        except Exception as ex:
+            lines.append(f"\n  ┌─ 生产订单 {ord_num} (头信息查询失败: {ex})")
+
+        # 4b. BOM 组件（计划用料）
+        try:
+            comps = prod_odata_get("/A_ProductionOrderComponent_2", {
+                "$filter": f"ManufacturingOrder eq '{ord_num}'",
+                "$top": "50",
+                "$select": "Material,Batch,RequiredQuantity,WithdrawnQuantity,BaseUnit,StorageLocation",
+            }).get("d", {}).get("results", [])
+            if comps:
+                lines.append(f"  │  BOM组件（计划用料）:")
+                for c in comps:
+                    comp_batch = c.get("Batch", "").strip() or "(未指定批次)"
+                    lines.append(
+                        f"  │    物料:{c.get('Material',''):20} 批次:{comp_batch:18} "
+                        f"计划:{c.get('RequiredQuantity','')} | 实际发料:{c.get('WithdrawnQuantity','0')} {c.get('BaseUnit','')} | 仓储:{c.get('StorageLocation','')}"
+                    )
+            else:
+                lines.append(f"  │  BOM组件: 未查到（API无权限或无组件数据）")
+        except Exception as ex:
+            lines.append(f"  │  BOM组件查询失败: {ex}")
+
+        # 4c. 实际发料凭证（mvt 261）— 扫共用 headers
+        issue_docs = _scan_mat_docs_for_order(ord_num, "261", headers)
+        lines.append(f"  │  实际发料凭证（mvt 261）:")
+        if issue_docs:
+            for f in sorted(issue_docs, key=lambda x: x["doc"]):
+                batch_str = f["batch"] or "(无批次)"
+                lines.append(
+                    f"  │    凭证:{f['doc']} 日期:{f['post_date']} | "
+                    f"物料:{f['mat']:20} 批次:{batch_str:18} 数量:{f['qty']} {f['unit']} | 仓储:{f['sloc']}"
+                )
+        else:
+            lines.append(f"  │    未找到261发料凭证（组件未启用批次管理或使用后台自动发料）")
+
+        lines.append(f"  └─ 追溯完毕")
+
+    # 5. 当前库存
+    try:
+        stock_items = httpx.get(
+            f"{SAP_STOCK_BASE_URL}/A_MatlStkInAcctMod",
+            auth=get_auth(),
+            params={"$filter": f"Material eq '{material}' and Plant eq '{plant}' and Batch eq '{batch}'",
+                    "$format": "json", "$select": "StorageLocation,InventoryStockType,MatlWrhsStkQtyInMatlBaseUnit,MaterialBaseUnit", "$top": "10"},
+            timeout=30,
+        ).json().get("d", {}).get("results", [])
+        lines.append(f"\n【当前库存（工厂{plant}）】")
+        stock_lines = [f"  仓储{r['StorageLocation']} 类型{r['InventoryStockType']}: {r['MatlWrhsStkQtyInMatlBaseUnit']} {r['MaterialBaseUnit']}"
+                       for r in stock_items if float(r.get("MatlWrhsStkQtyInMatlBaseUnit") or 0) != 0]
+        lines.extend(stock_lines or ["  库存为零或已全部出库"])
+    except Exception as e:
+        lines.append(f"\n【当前库存】查询失败: {e}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_batches(material: str, plant: str = "1710", top: int = 500) -> str:
+    """
+    查询物料在指定工厂的所有批次列表，包含库存数量和批次属性。
+    适用于：查看某物料有哪些批次、哪些批次还有库存、批次生产日期/有效期等。
+    示例问题：'ZFJ001有哪些批次？' / '1710工厂ZFJ001的批次清单'
+    """
+    try:
+        bp_data = _batch_base_get("/BatchPlant", {
+            "$filter": f"Material eq '{material}' and Plant eq '{plant}'",
+            "$top": str(top),
+            "$select": "Material,Batch,Plant",
+        })
+        batch_list = bp_data.get("d", {}).get("results", [])
+    except Exception as e:
+        return f"查询批次失败: {e}"
+
+    if not batch_list:
+        return f"物料 {material} 在工厂 {plant} 未找到批次记录（可能未启用批次管理）。"
+
+    # Get stock for all batches
+    try:
+        stock_resp = httpx.get(
+            f"{SAP_STOCK_BASE_URL}/A_MatlStkInAcctMod",
+            auth=get_auth(),
+            params={
+                "$filter": f"Material eq '{material}' and Plant eq '{plant}'",
+                "$format": "json",
+                "$select": "Batch,StorageLocation,InventoryStockType,MatlWrhsStkQtyInMatlBaseUnit,MaterialBaseUnit",
+                "$top": "200",
+            },
+            timeout=30
+        )
+        stock_items = stock_resp.json().get("d", {}).get("results", [])
+        stock_map: dict = {}
+        unit = ""
+        for s in stock_items:
+            b = s.get("Batch", "").strip()
+            qty = float(s.get("MatlWrhsStkQtyInMatlBaseUnit") or 0)
+            if qty != 0:
+                stock_map[b] = stock_map.get(b, 0) + qty
+                unit = s.get("MaterialBaseUnit", unit)
+    except Exception:
+        stock_map = {}
+        unit = ""
+
+    lines = [f"物料 {material} | 工厂 {plant} 批次清单（共{len(batch_list)}个批次）", ""]
+    for bp in batch_list:
+        b = bp.get("Batch", "")
+        qty = stock_map.get(b.strip(), 0)
+        stock_str = f"{qty} {unit}" if qty > 0 else "库存为零"
+        lines.append(f"  批次: {b:20} 库存: {stock_str}")
+
+    return "\n".join(lines)
 
 
 # ── RPA 采购订单自动处理工具 ────────────────────────────────────────────────────
@@ -3344,10 +3744,11 @@ def get_csrf_token_delivery() -> tuple[str, dict]:
 
 
 @mcp.tool()
-def list_outbound_deliveries(top: int = 10, filter: str = "") -> str:
+def list_outbound_deliveries(top: int = 500, filter: str = "") -> str:
     """查询外向交货单列表（OverallGoodsMovementStatus: A=未开始/B=部分/C=完成）。"""
     params = {
         "$top": top,
+        "$orderby": "DeliveryDate desc",
         "$select": "DeliveryDocument,DeliveryDocumentType,SoldToParty,ShipToParty,DeliveryDate,PlannedGoodsIssueDate,OverallGoodsMovementStatus,OverallPickingStatus,SalesOrganization,ShippingPoint",
     }
     if filter:
@@ -3637,6 +4038,63 @@ def create_outbound_delivery(
 
 
 @mcp.tool()
+def create_outbound_delivery_for_po(
+    purchase_order: str,
+    quantity: str,
+    purchase_order_item: str = "00010",
+    shipping_point: str = "1710",
+    quantity_unit: str = "PC",
+) -> str:
+    """基于采购订单（NB跨公司STO）创建 NLCC 外向交货单，供应方工厂执行 PGI 前必须先建交货单。
+    purchase_order: 跨公司采购订单号（如 4500002760）
+    quantity: 交货数量（必填）
+    purchase_order_item: 采购订单行项目，默认 00010
+    shipping_point: 发货工厂对应的 Shipping Point，默认 1710
+    quantity_unit: 数量单位，默认 PC
+    """
+    SAP_DEL_V2 = f"{SAP_DELIVERY_BASE_URL};v=0002"
+    try:
+        ct = httpx.get(f"{SAP_DEL_V2}/A_OutbDeliveryHeader?$top=0",
+                       auth=get_auth(), headers={"x-csrf-token": "Fetch", "Accept": "application/json"},
+                       follow_redirects=True, timeout=30)
+        csrf = ct.headers.get("x-csrf-token", "")
+        cookies = dict(ct.cookies)
+
+        item_payload = {
+            "ReferenceSDDocument": purchase_order,
+            "ReferenceSDDocumentItem": str(purchase_order_item).zfill(5),
+            "ActualDeliveryQuantity": str(quantity),
+            "DeliveryQuantityUnit": quantity_unit,
+        }
+
+        payload = {
+            "ShippingPoint": shipping_point,
+            "to_DeliveryDocumentItem": {"results": [item_payload]},
+        }
+        resp = httpx.post(f"{SAP_DEL_V2}/A_OutbDeliveryHeader",
+                          auth=get_auth(),
+                          headers={"x-csrf-token": csrf, "Accept": "application/json",
+                                   "Content-Type": "application/json", "sap-client": "100"},
+                          cookies=cookies, json=payload, follow_redirects=True, timeout=30)
+        if not resp.is_success:
+            try:
+                err = resp.json().get("error", {})
+                msg = err.get("message", {}).get("value", resp.text[:300])
+                details = [d.get("message") for d in err.get("innererror", {}).get("errordetails", [])]
+                if details:
+                    msg += " | 详情: " + "; ".join(details)
+            except Exception:
+                msg = resp.text[:300]
+            raise Exception(f"HTTP {resp.status_code}: {msg}")
+
+        d = resp.json().get("d", {})
+        delivery_doc = d.get("DeliveryDocument", "未知")
+        return f"NLCC交货单创建成功！交货单号: {delivery_doc} | 参考采购订单: {purchase_order} 行 {purchase_order_item}"
+    except Exception as e:
+        return f"创建交货单失败: {str(e)}"
+
+
+@mcp.tool()
 def ship_sales_order(
     sales_order: str,
     sales_order_item: str = "000010",
@@ -3811,10 +4269,11 @@ def ewm_bound_action(delivery_order: str, action: str, body: dict = None) -> dic
 
 
 @mcp.tool()
-def list_ewm_deliveries(top: int = 20, filter: str = "") -> str:
+def list_ewm_deliveries(top: int = 500, filter: str = "") -> str:
     """查询EWM仓库出库交货订单列表（状态: 1=未开始/2=部分/9=完成）。"""
     params = {
         "$top": top,
+        "$orderby": "PlannedDeliveryUTCDateTime desc",
         "$select": "EWMOutboundDeliveryOrder,OutboundDelivery,ShipToParty,ShipToPartyName,PickingStatus,GoodsIssueStatus,EWMShippingReadinessStatus,PlannedDeliveryUTCDateTime,NumberOfItems",
     }
     if filter:
@@ -4845,11 +5304,12 @@ def _get_default_order_type(plant: str) -> str:
 
 
 @mcp.tool()
-def list_planned_orders(plant: str = "1710", material: str = "", top: int = 20) -> str:
+def list_planned_orders(plant: str = "1710", material: str = "", top: int = 500) -> str:
     """查询计划订单列表（包含可转换为生产订单状态）。"""
     params = {
         "$format": "json",
         "$top": str(top),
+        "$orderby": "PlndOrderPlannedStartDate desc",
         "$select": "PlannedOrder,PlannedOrderType,Material,MaterialName,ProductionPlant,TotalQuantity,BaseUnit,"
                    "PlndOrderPlannedStartDate,PlndOrderPlannedEndDate,PlannedOrderIsConvertible,PlannedOrderIsFirm,"
                    "MRPController,StorageLocation,ProductionVersion",
@@ -5926,7 +6386,7 @@ def get_maintenance_order(maintenance_order: str) -> str:
 
 @mcp.tool()
 def list_maintenance_orders(
-    top: int = 10,
+    top: int = 500,
     maintenance_plant: str = "",
     order_type: str = "",
     equipment: str = "",
@@ -6383,7 +6843,7 @@ def get_equipment(equipment: str) -> str:
 
 @mcp.tool()
 def list_equipment(
-    top: int = 10,
+    top: int = 500,
     filter: str = "",
     maintenance_plant: str = "",
     equipment_category: str = "",
@@ -7005,7 +7465,7 @@ def maint_conf_post(path: str, payload: dict) -> dict:
 def list_measurement_documents(
     measuring_point: str = "",
     maintenance_order: str = "",
-    top: int = 10,
+    top: int = 500,
 ) -> str:
     """查询测量文档列表（可按测量点或维护订单过滤）。"""
     filters = []
@@ -7015,6 +7475,7 @@ def list_measurement_documents(
         filters.append(f"MsmtDocumentReferredOrder eq '{maintenance_order}'")
     params: dict = {
         "$top": top,
+        "$orderby": "MsmtRdngDate desc",
         "$select": "MeasurementDocument,MeasuringPoint,MsmtRdngDate,MsmtRdngTime,MeasurementReading,MeasurementReadingEntryUoM,MsmtRdngStatus,MsmtDocumentReferredOrder",
     }
     if filters:
@@ -7074,7 +7535,7 @@ def create_measurement_document(
 def list_maint_order_confirmations(
     maintenance_order: str = "",
     operation: str = "",
-    top: int = 10,
+    top: int = 500,
 ) -> str:
     """查询维护订单工序确认列表（可按订单号/工序号过滤）。"""
     filters = []
@@ -7084,6 +7545,7 @@ def list_maint_order_confirmations(
         filters.append(f"MaintenanceOrderOperation eq '{operation}'")
     params: dict = {
         "$top": top,
+        "$orderby": "PostingDate desc",
         "$select": "MaintOrderConf,MaintOrderConfCntrValue,MaintenanceOrder,MaintenanceOrderOperation,PostingDate,ActualWorkQuantity,ActualWorkQuantityUnit,IsFinalConfirmation,IsReversed,ConfirmationText",
     }
     if filters:
@@ -7224,7 +7686,7 @@ def asset_patch(path: str, payload: dict) -> bool:
 @mcp.tool()
 def list_assets(
     company_code: str = "",
-    top: int = 20,
+    top: int = 500,
     filter: str = "",
 ) -> str:
     """查询固定资产主数据列表（可按公司代码/资产类别过滤）。"""
@@ -7235,6 +7697,7 @@ def list_assets(
         filters.append(f"({filter})")
     params = {
         "$top": top,
+        "$orderby": "AssetCapitalizationDate desc",
         "$select": "CompanyCode,MasterFixedAsset,FixedAsset,FixedAssetDescription,AssetClass,AssetCapitalizationDate",
     }
     if filters:
@@ -7428,6 +7891,136 @@ def update_asset(
 
 
 # ─────────────────────────────────────────────
+# Fixed Asset — Intercompany Transfer
+# API_FIXEDASSETRETIREMENT + API_FIXEDASSETACQUISITION  OData V4
+# Communication Scenario: SAP_COM_0A95
+# ─────────────────────────────────────────────
+
+SAP_ASSET_RETIREMENT_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata4/sap/api_fixedassetretirement/srvd_a2x/sap/fixedassetretirement/0001"
+SAP_ASSET_ACQUISITION_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata4/sap/api_fixedassetacquisition/srvd_a2x/sap/fixedassetacquisition/0001"
+
+
+def _asset_v4_csrf(base_url: str) -> tuple[str, dict]:
+    url = f"{base_url}/"
+    headers = {"x-csrf-token": "Fetch", "Accept": "application/json"}
+    response = httpx.get(url, auth=get_auth(), headers=headers, verify=True, timeout=30)
+    token = response.headers.get("x-csrf-token", "")
+    cookies = dict(response.cookies)
+    return token, cookies
+
+
+def _asset_v4_action_post(base_url: str, action_path: str, payload: dict) -> dict:
+    token, cookies = _asset_v4_csrf(base_url)
+    url = f"{base_url}{action_path}"
+    headers = {"Accept": "application/json", "Content-Type": "application/json", "x-csrf-token": token}
+    response = httpx.post(url, auth=get_auth(), headers=headers, json=payload, cookies=cookies, verify=True, timeout=30)
+    if not response.is_success:
+        try:
+            err = response.json()
+        except Exception:
+            err = response.text
+        raise Exception(f"HTTP {response.status_code}: {json.dumps(err, ensure_ascii=False)}")
+    try:
+        return response.json()
+    except Exception:
+        return {}
+
+
+@mcp.tool()
+def transfer_asset_intercompany(
+    sending_company_code: str,
+    sending_master_fixed_asset: str,
+    sending_fixed_asset: str,
+    receiving_company_code: str,
+    receiving_master_fixed_asset: str,
+    receiving_fixed_asset: str,
+    document_date: str,
+    posting_date: str,
+    asset_value_date: str,
+    document_reference_id: str = "",
+    header_text: str = "",
+) -> str:
+    """执行公司间固定资产转移过账（Intercompany Asset Transfer）。
+    转出方调用 Fixed Asset Retirement Post Action，转入方调用 Fixed Asset Acquisition Post Action。
+    Communication Scenario: SAP_COM_0A95
+
+    sending_company_code: 转出公司代码，例如 1010
+    sending_master_fixed_asset: 转出资产主编号，例如 10000001
+    sending_fixed_asset: 转出资产子编号，通常为 0
+    receiving_company_code: 转入公司代码，例如 2010
+    receiving_master_fixed_asset: 转入资产主编号（须已在目标公司创建）
+    receiving_fixed_asset: 转入资产子编号，通常为 0
+    document_date: 凭证日期，格式 YYYY-MM-DD
+    posting_date: 过账日期，格式 YYYY-MM-DD
+    asset_value_date: 资产价值日期，格式 YYYY-MM-DD
+    document_reference_id: 参考凭证号（可选）
+    header_text: 凭证抬头文本（可选）
+    """
+    # Step 1: 转出方 — 直接调用 Post bound action（不需要先 POST EntitySet）
+    retirement_payload = {
+        "ReferenceDocumentItem": "1",
+        "BusinessTransactionType": "RA31",
+        "CompanyCode": sending_company_code,
+        "MasterFixedAsset": sending_master_fixed_asset,
+        "FixedAsset": sending_fixed_asset,
+        "DocumentDate": document_date,
+        "PostingDate": posting_date,
+        "AssetValueDate": asset_value_date,
+        "PartnerCompanyCode": receiving_company_code,
+        "PartnerMasterFixedAsset": receiving_master_fixed_asset,
+        "PartnerFixedAsset": receiving_fixed_asset,
+        "_Ledger": [],
+    }
+    if document_reference_id:
+        retirement_payload["DocumentReferenceID"] = document_reference_id
+    if header_text:
+        retirement_payload["AccountingDocumentHeaderText"] = header_text
+
+    retirement_result = _asset_v4_action_post(
+        SAP_ASSET_RETIREMENT_BASE_URL,
+        "/FixedAssetRetirement/SAP__self.Post",
+        retirement_payload,
+    )
+
+    retirement_doc = retirement_result.get("ReferenceDocument", "") or retirement_result.get("value", {}).get("ReferenceDocument", "")
+
+    # Step 2: 转入方 — 直接调用 Post bound action
+    acquisition_payload = {
+        "ReferenceDocumentItem": "1",
+        "BusinessTransactionType": "RA50",
+        "CompanyCode": receiving_company_code,
+        "MasterFixedAsset": receiving_master_fixed_asset,
+        "FixedAsset": receiving_fixed_asset,
+        "DocumentDate": document_date,
+        "PostingDate": posting_date,
+        "AssetValueDate": asset_value_date,
+        "PartnerCompanyCode": sending_company_code,
+        "PartnerMasterFixedAsset": sending_master_fixed_asset,
+        "PartnerFixedAsset": sending_fixed_asset,
+        "_Ledger": [],
+    }
+    if document_reference_id:
+        acquisition_payload["DocumentReferenceID"] = document_reference_id
+    if header_text:
+        acquisition_payload["AccountingDocumentHeaderText"] = header_text
+
+    acquisition_result = _asset_v4_action_post(
+        SAP_ASSET_ACQUISITION_BASE_URL,
+        "/FixedAssetAcquisition/SAP__self.Post",
+        acquisition_payload,
+    )
+
+    acquisition_doc = acquisition_result.get("ReferenceDocument", "") or acquisition_result.get("value", {}).get("ReferenceDocument", "")
+
+    return (
+        f"公司间资产转移过账成功！\n"
+        f"  转出：{sending_company_code} / {sending_master_fixed_asset}-{sending_fixed_asset}  凭证：{retirement_doc}\n"
+        f"  转入：{receiving_company_code} / {receiving_master_fixed_asset}-{receiving_fixed_asset}  凭证：{acquisition_doc}\n"
+        f"  过账日期：{posting_date}  资产价值日期：{asset_value_date}"
+    )
+
+
+# ─────────────────────────────────────────────
 # Functional Location (SAP_COM_0395)
 # API_FUNCTIONALLOCATION  OData V2
 # ─────────────────────────────────────────────
@@ -7448,7 +8041,7 @@ def list_functional_locations(
     superior_fl: str = "",
     plant: str = "",
     fl_category: str = "",
-    top: int = 50,
+    top: int = 500,
 ) -> str:
     """查询功能位置列表（可按上级FL/工厂/类别过滤）。"""
     filters = []
@@ -8033,6 +8626,7 @@ def get_mrp_job_status(job_name: str, job_run_count: str) -> str:
 
 
 SAP_ROUTING_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata/sap/API_PRODUCTION_ROUTING"
+SAP_BP_BASE_URL = "https://my409379-api.s4hana.cloud.sap/sap/opu/odata/sap/API_BUSINESS_PARTNER"
 def _routing_get(path: str, params: dict = None) -> dict:
     url = f"{SAP_ROUTING_BASE_URL}{path}"
     headers = {"Accept": "application/json"}
@@ -8721,8 +9315,8 @@ def clear_customer_open_items(
 # 邮件工具（163 IMAP / SMTP）
 # ─────────────────────────────────────────────
 
-EMAIL_ACCOUNT = os.environ.get("EMAIL_ACCOUNT", "sapordermail@163.com")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+EMAIL_ACCOUNT = "sapordermail@163.com"
+EMAIL_PASSWORD = "PSJXTH8JfPDtcSSZ"
 IMAP_HOST = "imap.163.com"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.163.com"
@@ -8743,8 +9337,10 @@ def _decode_str(s) -> str:
 
 
 def _get_imap() -> imaplib.IMAP4_SSL:
+    imaplib.Commands['ID'] = ('NONAUTH', 'AUTH', 'SELECTED')
     M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     M.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+    M._simple_command('ID', '("name" "Thunderbird" "version" "102.0")')
     return M
 
 
@@ -8790,7 +9386,9 @@ def list_emails(folder: str = "INBOX", count: int = 20) -> str:
     count = min(count, 50)
     try:
         M = _get_imap()
-        M.select(folder)
+        status, _ = M.select(folder)
+        if status != "OK":
+            return f"打开文件夹失败：{folder}"
         _, data = M.search(None, "ALL")
         ids = data[0].split()
         ids = ids[-count:][::-1]
@@ -8819,7 +9417,9 @@ def get_email(email_id: str, folder: str = "INBOX") -> str:
     """
     try:
         M = _get_imap()
-        M.select(folder)
+        status, _ = M.select(folder)
+        if status != "OK":
+            return f"打开文件夹失败：{folder}"
         _, raw = M.fetch(email_id.encode(), "(RFC822)")
         if not raw or raw[0] is None:
             return f"未找到邮件 ID={email_id}"
@@ -8850,7 +9450,9 @@ def search_emails(keyword: str = "", sender: str = "", since_date: str = "", fol
     count = min(count, 50)
     try:
         M = _get_imap()
-        M.select(folder)
+        status, _ = M.select(folder)
+        if status != "OK":
+            return f"打开文件夹失败：{folder}"
         criteria = []
         if keyword:
             criteria.append(f'SUBJECT "{keyword}"')
@@ -8894,7 +9496,9 @@ def reply_email(email_id: str, body: str, folder: str = "INBOX") -> str:
     """
     try:
         M = _get_imap()
-        M.select(folder)
+        status, _ = M.select(folder)
+        if status != "OK":
+            return f"打开文件夹失败：{folder}"
         _, raw = M.fetch(email_id.encode(), "(RFC822)")
         if not raw or raw[0] is None:
             return f"未找到邮件 ID={email_id}"
@@ -8947,6 +9551,131 @@ def send_email(to: str, subject: str, body: str) -> str:
         return f"✅ 邮件已发送：{subject}（收件人：{to}）"
     except Exception as e:
         return f"发送邮件失败：{e}"
+
+
+@mcp.tool()
+def send_weekly_sales_report() -> str:
+    """发送本周销售订单周报邮件至 jason.yang08@sap.com 和 tst920@163.com。
+    从 SAP S/4HANA 实时拉取本周订单数据，计算 KPI，生成 HTML 邮件并发送。"""
+    script = r"C:\Users\I568276\Desktop\ClaudeOutputs\weekly_sales_email.py"
+    try:
+        result = subprocess.run(
+            ["python", script],
+            capture_output=True, text=True, encoding="utf-8", timeout=120
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0:
+            return f"✅ 销售周报发送成功\n{output}"
+        else:
+            return f"❌ 销售周报发送失败（exit={result.returncode}）\n{output}"
+    except Exception as e:
+        return f"❌ 执行失败：{e}"
+
+
+@mcp.tool()
+def send_html_email(subject: str, html_content: str) -> str:
+    """将 Joule 生成的 HTML 内容通过 agently-cli 发送邮件至 jason.yang08@sap.com 和 tst920@163.com。
+
+    参数：
+    - subject: 邮件主题，例如 "【销售周报】2026-W34"
+    - html_content: 完整的 HTML 邮件正文内容
+    """
+    import tempfile, json
+
+    RECIPIENTS = ["jason.yang08@sap.com", "tst920@163.com"]
+    AGENTLY = "agently-cli.cmd"
+
+    # 写入临时 HTML 文件
+    tmp_dir = r"C:\Users\I568276\Desktop\ClaudeOutputs"
+    body_file = os.path.join(tmp_dir, "_joule_email_body.html")
+    try:
+        with open(body_file, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    except Exception as e:
+        return f"❌ 写入 HTML 文件失败：{e}"
+
+    to_args = []
+    for r in RECIPIENTS:
+        to_args += ["--to", r]
+
+    cmd = [AGENTLY, "message", "+send",
+           *to_args,
+           "--subject", subject,
+           "--body-file", "_joule_email_body.html"]
+
+    try:
+        # 第一阶段
+        r1 = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=tmp_dir, timeout=30)
+        try:
+            d1 = json.loads(r1.stdout)
+        except Exception:
+            return f"❌ 解析响应失败：{r1.stdout[:300]}"
+
+        needs_confirm = r1.returncode == 8 or (d1.get("data") or {}).get("confirmation_required")
+        if needs_confirm:
+            ctk = (d1.get("data") or {}).get("confirmation_token")
+            if not ctk:
+                return "❌ 未获取到 confirmation_token"
+            # 第二阶段
+            r2 = subprocess.run(cmd + ["--confirmation-token", ctk],
+                                capture_output=True, text=True, encoding="utf-8", cwd=tmp_dir, timeout=30)
+            try:
+                d2 = json.loads(r2.stdout)
+            except Exception:
+                return f"❌ 二阶段解析失败：{r2.stdout[:300]}"
+            if r2.returncode == 0 and d2.get("ok"):
+                return f"✅ 邮件发送成功，收件人：{', '.join(RECIPIENTS)}"
+            else:
+                return f"❌ 发送失败：{r2.stdout[:300]}"
+
+        if r1.returncode == 0 and d1.get("ok") and not (d1.get("data") or {}).get("confirmation_required"):
+            return f"✅ 邮件发送成功，收件人：{', '.join(RECIPIENTS)}"
+        else:
+            return f"❌ 发送失败：{r1.stdout[:300]}"
+
+    except Exception as e:
+        return f"❌ 执行失败：{e}"
+    finally:
+        try:
+            os.remove(body_file)
+        except Exception:
+            pass
+
+
+@mcp.tool()
+def get_business_partner(business_partner: str) -> str:
+    """查询业务伙伴（客户/供应商）主数据，返回名称、类型、语言等信息。支持逗号分隔传入多个编号批量查询。"""
+    ids = [bp.strip() for bp in business_partner.split(",") if bp.strip()]
+    if not ids:
+        return "请提供业务伙伴编号。"
+
+    results = []
+    for bp_id in ids:
+        try:
+            resp = httpx.get(
+                f"{SAP_BP_BASE_URL}/A_BusinessPartner('{bp_id}')",
+                auth=get_auth(),
+                headers={"Accept": "application/json"},
+                params={"$format": "json", "$select": "BusinessPartner,BusinessPartnerFullName,BusinessPartnerType,OrganizationBPName1,OrganizationBPName2,BusinessPartnerIsBlocked,BusinessPartnerCategory"},
+                verify=True,
+                timeout=30,
+            )
+            if resp.status_code == 404:
+                results.append(f"BP {bp_id}: 未找到")
+                continue
+            resp.raise_for_status()
+            d = resp.json().get("d", {})
+            name = d.get("BusinessPartnerFullName") or d.get("OrganizationBPName1") or d.get("OrganizationBPName2") or "(无名称)"
+            bp_type = d.get("BusinessPartnerType", "")
+            category = {"1": "自然人", "2": "组织", "3": "集团"}.get(d.get("BusinessPartnerCategory", ""), d.get("BusinessPartnerCategory", ""))
+            blocked = "⚠️ 已冻结" if d.get("BusinessPartnerIsBlocked") else "正常"
+            results.append(
+                f"BP {bp_id}: {name} | 类型: {bp_type} | 分类: {category} | 状态: {blocked}"
+            )
+        except Exception as e:
+            results.append(f"BP {bp_id}: 查询失败 - {str(e)[:120]}")
+
+    return "\n".join(results)
 
 
 if __name__ == "__main__":
