@@ -43,6 +43,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 mcp = FastMCP("SAP MCP Server", stateless_http=True, transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
 
+def fmt_date(val: str, length: int = 10) -> str:
+    """将 OData v2 /Date(ms)/ 格式或 ISO 字符串统一转为 YYYY-MM-DD。"""
+    if not val:
+        return ""
+    s = str(val)
+    m = re.search(r"/Date\((\d+)", s)
+    if m:
+        try:
+            return datetime.datetime.utcfromtimestamp(int(m.group(1)) / 1000).strftime("%Y-%m-%d")
+        except Exception:
+            return s
+    return s[:length] if len(s) >= length else s
+
+
 def send_teams_notification(title: str, message: str, color: str = "0076D7") -> str:
     """通过 Power Automate Flow 发送 Teams 消息，返回推送结果描述。"""
     if not TEAMS_FLOW_URL:
@@ -130,21 +144,40 @@ def to_date_str(date_str: str) -> str:
 # ── 查询工具 ────────────────────────────────────────────────
 
 @mcp.tool()
-def list_sales_orders(top: int = 500, filter: str = "") -> str:
-    """查询销售订单列表（top=数量，filter=OData条件）。"""
-    params = {"$top": top, "$orderby": "SalesOrderDate desc", "$select": "SalesOrder,SalesOrderType,SoldToParty,TotalNetAmount,TransactionCurrency,SalesOrderDate,RequestedDeliveryDate,PurchaseOrderByCustomer"}
+def list_sales_orders(top: int = 500, filter: str = "", sales_organization: str = "", company_code: str = "") -> str:
+    """查询销售订单列表（top=数量，filter=OData条件，sales_organization/company_code=范围过滤）。
+
+    不加过滤将返回所有公司/销售组织的数据，建议始终指定 sales_organization 过滤条件。
+    """
+    filters = []
+    if sales_organization:
+        filters.append(f"SalesOrganization eq '{sales_organization}'")
+    if company_code:
+        filters.append(f"SalesOrganization eq '{company_code}'")  # SO 是最接近的范围参数
     if filter:
-        params["$filter"] = filter
+        filters.append(f"({filter})")
+    params = {
+        "$top": top,
+        "$orderby": "SalesOrderDate desc",
+        "$select": "SalesOrder,SalesOrderType,SoldToParty,TotalNetAmount,TransactionCurrency,SalesOrderDate,RequestedDeliveryDate,PurchaseOrderByCustomer,SalesOrganization",
+    }
+    if filters:
+        params["$filter"] = " and ".join(filters)
     data = odata_get("/A_SalesOrder", params)
     orders = data.get("d", {}).get("results", [])
     if not orders:
         return "没有找到销售订单。"
-    lines = []
+    if not filters:
+        header = f"⚠️ 未指定过滤条件，以下为全公司混合数据（共 {len(orders)} 条）：\n"
+    else:
+        header = ""
+    lines = [header] if header else []
     for o in orders:
         lines.append(
             f"订单号: {o.get('SalesOrder')} | 类型: {o.get('SalesOrderType')} | "
-            f"客户: {o.get('SoldToParty')} | 金额: {o.get('TotalNetAmount')} {o.get('TransactionCurrency')} | "
-            f"客户参考: {o.get('PurchaseOrderByCustomer')} | 日期: {o.get('SalesOrderDate', '')[:10]}"
+            f"客户: {o.get('SoldToParty')} | 销售组织: {o.get('SalesOrganization','')} | "
+            f"金额: {o.get('TotalNetAmount')} {o.get('TransactionCurrency')} | "
+            f"客户参考: {o.get('PurchaseOrderByCustomer')} | 日期: {fmt_date(o.get('SalesOrderDate', ''))}"
         )
     return "\n".join(lines)
 
@@ -362,20 +395,30 @@ def get_delivery_risk(sales_order: str) -> str:
 
 
 @mcp.tool()
-def get_customer_order_history(sold_to_party: str, top: int = 20) -> str:
-    """查询客户历史订单统计（总金额、均值、最近日期、异常大单检测）。"""
+def get_customer_order_history(sold_to_party: str, top: int = 20, sales_organization: str = "") -> str:
+    """查询客户历史订单统计（总金额、均值、最近日期、异常大单检测）。
+
+    参数：
+    - sold_to_party: 客户代码
+    - top: 查询条数（默认 20）
+    - sales_organization: 销售组织过滤（如 1710），不填则返回全公司汇总
+    """
+    filter_str = f"SoldToParty eq '{sold_to_party}'"
+    if sales_organization:
+        filter_str += f" and SalesOrganization eq '{sales_organization}'"
     params = {
-        "$filter": f"SoldToParty eq '{sold_to_party}'",
+        "$filter": filter_str,
         "$top": top,
-        "$select": "SalesOrder,TotalNetAmount,TransactionCurrency,SalesOrderDate,PurchaseOrderByCustomer",
+        "$select": "SalesOrder,TotalNetAmount,TransactionCurrency,SalesOrderDate,PurchaseOrderByCustomer,SalesOrganization",
         "$orderby": "SalesOrderDate desc"
     }
     data = odata_get("/A_SalesOrder", params)
     orders = data.get("d", {}).get("results", [])
 
     if not orders:
+        scope = f"销售组织 {sales_organization} / " if sales_organization else ""
         return (
-            f"客户 {sold_to_party} 暂无历史订单记录，为新客户，建议人工审核本次订单。\n\n"
+            f"客户 {sold_to_party}（{scope}）暂无历史订单记录，为新客户，建议人工审核本次订单。\n\n"
             f"---\n"
             f"Customer {sold_to_party} has no order history. New customer — manual review recommended."
         )
@@ -410,12 +453,16 @@ def get_customer_order_history(sold_to_party: str, top: int = 20) -> str:
         status_en = "✅ Order amount is normal and consistent with history."
 
     return (
-        f"客户 {sold_to_party} 历史订单分析（最近 {len(orders)} 笔）\n"
+        f"客户 {sold_to_party} 历史订单分析（最近 {len(orders)} 笔"
+        + (f" / 销售组织 {sales_organization}" if sales_organization else "，全公司汇总")
+        + f"）\n"
         f"总金额: {total:.2f} {currency} | 平均金额: {avg:.2f} | 最大单笔: {max_amt:.2f}\n"
         f"最近下单日期: {latest}\n"
         f"{status_cn}\n\n"
         f"---\n"
-        f"Customer {sold_to_party} - Order History (Last {len(orders)} orders)\n"
+        f"Customer {sold_to_party} - Order History (Last {len(orders)} orders"
+        + (f" / SalesOrg {sales_organization}" if sales_organization else ", all companies")
+        + f")\n"
         f"Total: {total:.2f} {currency} | Average: {avg:.2f} | Max Single Order: {max_amt:.2f}\n"
         f"Latest Order Date: {latest}\n"
         f"{status_en}"
@@ -2584,9 +2631,10 @@ def list_supplier_invoices(
     for i in items:
         lines.append(
             f"发票: {i.get('SupplierInvoice')} / {i.get('FiscalYear')} | "
+            f"公司: {i.get('CompanyCode','')} | "
             f"供应商: {i.get('InvoicingParty')} | "
             f"金额: {i.get('InvoiceGrossAmount')} {i.get('DocumentCurrency')} | "
-            f"过账日: {str(i.get('PostingDate',''))[:10]} | "
+            f"过账日: {fmt_date(i.get('PostingDate',''))} | "
             f"状态: {i.get('SupplierInvoiceStatus')} | "
             f"参考号: {i.get('SupplierInvoiceIDByInvcgParty','')}"
         )
@@ -2833,6 +2881,7 @@ def list_production_orders(top: int = 500, filter: str = "") -> str:
     params = {
         "$top": top,
         "$orderby": "MfgOrderCreationDate desc",
+        "$select": "ManufacturingOrder,ManufacturingOrderType,Material,Plant,TotalQuantity,ProductionUnit,MfgOrderCreationDate",
     }
     if filter:
         params["$filter"] = filter
@@ -2845,8 +2894,8 @@ def list_production_orders(top: int = 500, filter: str = "") -> str:
         lines.append(
             f"订单号: {o.get('ManufacturingOrder')} | 类型: {o.get('ManufacturingOrderType')} | "
             f"物料: {o.get('Material')} | 工厂: {o.get('Plant')} | "
-            f"数量: {o.get('TotalQuantity')} {o.get('BaseUnit')} | "
-            f"创建日期: {o.get('MfgOrderCreationDate', '')[:10]}"
+            f"数量: {o.get('TotalQuantity')} {o.get('ProductionUnit','') or o.get('BaseUnit','')} | "
+            f"创建日期: {fmt_date(o.get('MfgOrderCreationDate', ''))}"
         )
     return "\n".join(lines)
 
@@ -3744,20 +3793,33 @@ def get_csrf_token_delivery() -> tuple[str, dict]:
 
 
 @mcp.tool()
-def list_outbound_deliveries(top: int = 500, filter: str = "") -> str:
-    """查询外向交货单列表（OverallGoodsMovementStatus: A=未开始/B=部分/C=完成）。"""
+def list_outbound_deliveries(top: int = 500, filter: str = "", shipping_point: str = "", sales_organization: str = "") -> str:
+    """查询外向交货单列表（OverallGoodsMovementStatus: A=未开始/B=部分/C=完成）。
+
+    建议指定 shipping_point 或 sales_organization 避免返回全公司混合数据。
+    """
+    filters = []
+    if shipping_point:
+        filters.append(f"ShippingPoint eq '{shipping_point}'")
+    if sales_organization:
+        filters.append(f"SalesOrganization eq '{sales_organization}'")
+    if filter:
+        filters.append(f"({filter})")
     params = {
         "$top": top,
         "$orderby": "DeliveryDate desc",
         "$select": "DeliveryDocument,DeliveryDocumentType,SoldToParty,ShipToParty,DeliveryDate,PlannedGoodsIssueDate,OverallGoodsMovementStatus,OverallPickingStatus,SalesOrganization,ShippingPoint",
     }
-    if filter:
-        params["$filter"] = filter
+    if filters:
+        params["$filter"] = " and ".join(filters)
     data = delivery_odata_get("/A_OutbDeliveryHeader", params)
     deliveries = data.get("d", {}).get("results", [])
     if not deliveries:
         return "没有找到外向交货单。"
-    lines = []
+    if not filters:
+        lines = ["⚠️ 未指定过滤条件，以下为全公司混合数据："]
+    else:
+        lines = []
     for d in deliveries:
         gi_status_map = {"A": "未开始", "B": "部分发货", "C": "已完成"}
         pick_status_map = {"A": "未开始", "B": "部分", "C": "已完成"}
@@ -3766,7 +3828,8 @@ def list_outbound_deliveries(top: int = 500, filter: str = "") -> str:
         lines.append(
             f"交货单: {d.get('DeliveryDocument')} | 类型: {d.get('DeliveryDocumentType')} | "
             f"售达方: {d.get('SoldToParty')} | 收货方: {d.get('ShipToParty')} | "
-            f"计划发货日期: {str(d.get('PlannedGoodsIssueDate', ''))[:10]} | "
+            f"销售组织: {d.get('SalesOrganization','')} | 装运点: {d.get('ShippingPoint','')} | "
+            f"计划发货日期: {fmt_date(d.get('PlannedGoodsIssueDate', ''))} | "
             f"拣货状态: {pick_status} | 发货状态: {gi_status}"
         )
     return "\n".join(lines)
@@ -7697,8 +7760,7 @@ def list_assets(
         filters.append(f"({filter})")
     params = {
         "$top": top,
-        "$orderby": "AssetCapitalizationDate desc",
-        "$select": "CompanyCode,MasterFixedAsset,FixedAsset,FixedAssetDescription,AssetClass,AssetCapitalizationDate",
+        "$select": "CompanyCode,MasterFixedAsset,FixedAsset,FixedAssetDescription,AssetClass,CreationDate",
     }
     if filters:
         params["$filter"] = " and ".join(filters)
@@ -7713,7 +7775,7 @@ def list_assets(
             f"  {r.get('CompanyCode','')}/{r.get('MasterFixedAsset','')}-{r.get('FixedAsset','')}"
             f" | {r.get('FixedAssetDescription','')}"
             f" | Class: {r.get('AssetClass','')}"
-            f" | Cap.date: {r.get('AssetCapitalizationDate','')}"
+            f" | 创建日: {r.get('CreationDate','')}"
         )
     return "\n".join(lines)
 
@@ -9019,11 +9081,20 @@ def get_customer_open_items(
     customer: str,
     company_code: str = "1710",
     fiscal_year: str = "2026",
+    top: int = 50,
+    skip: int = 0,
 ) -> str:
     """查询客户未清应收账款明细（尚未收款的开票FI凭证）。
 
     通过 Billing Document API 查询该客户本财年的 F2 开票凭证及对应 FI 应收凭证号，
     供后续 post_customer_incoming_payment 使用。
+
+    参数：
+    - customer: 客户代码
+    - company_code: 公司代码（如 1710），过滤生效，无效值将返回空集
+    - fiscal_year: 财年（如 2026）
+    - top: 每页返回条数（默认 50）
+    - skip: 跳过条数（用于分页，默认 0）
     """
     try:
         resp = httpx.get(
@@ -9031,41 +9102,94 @@ def get_customer_open_items(
             auth=get_auth(),
             headers={"Accept": "application/json"},
             params={
-                "$filter": f"SoldToParty eq '{customer}' and BillingDocumentType eq 'F2'",
-                "$select": "BillingDocument,BillingDocumentType,AccountingDocument,FiscalYear,TotalNetAmount,TransactionCurrency,CreationDate",
-                "$top": "20",
+                "$filter": (
+                    f"SoldToParty eq '{customer}'"
+                    f" and BillingDocumentType eq 'F2'"
+                    f" and CompanyCode eq '{company_code}'"
+                    f" and FiscalYear eq '{fiscal_year}'"
+                ),
+                "$select": "BillingDocument,BillingDocumentType,AccountingDocument,FiscalYear,CompanyCode,TotalNetAmount,TransactionCurrency,CreationDate,BillingDocumentDate,CustomerPaymentTerms,AdditionalValueDays,FixedValueDate,BillingDocumentClearingStatus",
+                "$top": str(top + 1),  # 多取1条用于判断是否有更多
+                "$skip": str(skip),
                 "$orderby": "CreationDate desc",
             },
             verify=True, timeout=60, follow_redirects=True,
         )
         resp.raise_for_status()
-        items = resp.json().get("value", [])
+        raw = resp.json().get("value", [])
     except Exception as e:
         return f"查询失败: {e}"
 
-    # 按财年过滤
-    items = [it for it in items if it.get("FiscalYear", "") == fiscal_year]
+    is_truncated = len(raw) > top
+    items = raw[:top]
+
+    # 过滤零金额记录（冲销占位凭证）
+    items = [it for it in items if float(it.get("TotalNetAmount", 0) or 0) != 0.0]
 
     if not items:
-        return f"客户 {customer} 在财年 {fiscal_year} 无开票记录（F2）。"
+        return f"客户 {customer} 在公司 {company_code} 财年 {fiscal_year} 无未清应收记录。"
 
-    lines = [f"客户 {customer} 应收开票明细（财年 {fiscal_year}，共 {len(items)} 条）：", ""]
-    total = 0.0
-    currency = ""
+    # 按币种分组汇总，禁止跨币种相加
+    from collections import defaultdict
+    currency_totals: dict = defaultdict(float)
+    lines = [f"客户 {customer} 应收开票明细（公司 {company_code} / 财年 {fiscal_year}，第 {skip+1}-{skip+len(items)} 条）：", ""]
+
+    import datetime as _dt
+    today = _dt.date.today()
+
     for it in items:
         amt = float(it.get("TotalNetAmount", 0) or 0)
         cur = it.get("TransactionCurrency", "")
-        currency = cur
-        total += amt
+        currency_totals[cur] += amt
         date_str = str(it.get("CreationDate", ""))[:10]
-        lines.append(
+        bill_date_str = str(it.get("BillingDocumentDate", ""))[:10]
+        payment_terms = it.get("CustomerPaymentTerms", "")
+        add_days = int(it.get("AdditionalValueDays", 0) or 0)
+        fixed_due = str(it.get("FixedValueDate", ""))[:10]
+        clearing_status = it.get("BillingDocumentClearingStatus", "")
+
+        # 推算到期日
+        due_str = ""
+        overdue_str = ""
+        if fixed_due and fixed_due not in ("None", "null", ""):
+            due_str = fixed_due
+        elif bill_date_str and bill_date_str not in ("None", "null", ""):
+            try:
+                bill_date = _dt.date.fromisoformat(bill_date_str)
+                due_date = bill_date + _dt.timedelta(days=add_days)
+                due_str = str(due_date)
+                overdue_days = (today - due_date).days
+                if overdue_days > 0:
+                    overdue_str = f"⚠️ 逾期 {overdue_days} 天"
+                elif overdue_days >= -7:
+                    overdue_str = f"⏰ {-overdue_days} 天后到期"
+            except Exception:
+                pass
+
+        clearing_label = {"C": "已清", "": "未清", "A": "部分清"}.get(clearing_status, clearing_status)
+
+        line = (
             f"  开票凭证: {it.get('BillingDocument','')}  "
             f"FI应收凭证: {it.get('AccountingDocument','')}  "
-            f"财年: {it.get('FiscalYear','')}  "
+            f"公司: {it.get('CompanyCode','')}  "
             f"金额: {amt:.2f} {cur}  "
-            f"开票日: {date_str}"
+            f"开票日: {bill_date_str}  "
+            f"账期: {payment_terms}+{add_days}天  "
+            f"到期日: {due_str}  "
+            f"状态: {clearing_label}"
         )
-    lines += ["", f"  合计: {total:.2f} {currency}"]
+        if overdue_str:
+            line += f"  {overdue_str}"
+        lines.append(line)
+
+    lines.append("")
+    lines.append("  各币种合计：")
+    for cur, total in sorted(currency_totals.items()):
+        lines.append(f"    {cur}: {total:.2f}")
+
+    if is_truncated:
+        lines.append(f"\n  ⚠️ 结果已截断，仅显示前 {top} 条，使用 skip={skip+top} 获取下一页。")
+
     lines += [
         "",
         "提示：使用 post_customer_incoming_payment 传入 billing_document（开票凭证号）即可自动查出 FI 凭证并清账。",
@@ -9676,6 +9800,120 @@ def get_business_partner(business_partner: str) -> str:
             results.append(f"BP {bp_id}: 查询失败 - {str(e)[:120]}")
 
     return "\n".join(results)
+
+
+@mcp.tool()
+def run_intercompany_sto_flow(
+    purchase_order: str,
+    storage_location: str = "171A",
+    batch: str = "",
+    receiving_storage_location: str = "131A",
+    shipping_point: str = "1710",
+    quantity: str = "",
+    purchase_order_item: str = "00010",
+    skip_billing: bool = False,
+) -> str:
+    """跨公司 STO 完整流程编排：NBAI采购订单 → NLCC交货单 → PGI(MT543) → GR(MT101) → IV发票。
+    purchase_order: NBAI类型采购订单号（如 4500002877）
+    storage_location: 发货库位（默认 171A）
+    batch: 批次号（可选）
+    receiving_storage_location: 收货库位（默认 131A）
+    shipping_point: 发货点（默认 1710）
+    quantity: 交货数量，留空则取PO数量
+    skip_billing: True=跳过IV开票步骤（仅走物流）
+    """
+    steps = []
+
+    # Step 1: 查PO获取数量和物料
+    try:
+        params_po = {
+            "$filter": f"PurchaseOrder eq '{purchase_order}' and PurchaseOrderItem eq '{purchase_order_item}'",
+            "$select": "Material,Plant,OrderQuantity,PurchaseOrderQuantityUnit",
+            "$top": "1"
+        }
+        data = odata_v4_get("/PurchaseOrderItem", params_po)
+        items = data.get("value", [])
+        if not items:
+            return f"❌ 找不到采购订单 {purchase_order} 行项目 {purchase_order_item}，请确认PO号和行项目号。"
+        item_data = items[0]
+        po_qty = quantity or str(item_data.get("OrderQuantity", "1"))
+        po_unit = item_data.get("PurchaseOrderQuantityUnit", "PC")
+        po_material = item_data.get("Material", "")
+        po_plant = item_data.get("Plant", "")
+        steps.append(f"【Step 1】读取PO信息 ✅\n  物料: {po_material} | 数量: {po_qty} {po_unit} | 收货工厂: {po_plant}")
+    except Exception as e:
+        return f"❌ Step 1 读取PO失败: {e}"
+
+    # Step 2: 创建NLCC外向交货单
+    delivery_result = create_outbound_delivery_for_po(
+        purchase_order=purchase_order,
+        quantity=po_qty,
+        purchase_order_item=purchase_order_item,
+        shipping_point=shipping_point,
+        quantity_unit=po_unit,
+    )
+    steps.append(f"【Step 2】创建NLCC交货单\n  {delivery_result}")
+    if "失败" in delivery_result or "Error" in delivery_result.lower():
+        return "\n\n".join(steps) + "\n\n❌ 流程中止于Step 2，请检查CBIC销售订单是否已生成、Shipping Point配置是否正确。"
+
+    # 提取交货单号
+    delivery_doc = ""
+    for part in delivery_result.split():
+        if part.isdigit() and len(part) >= 8:
+            delivery_doc = part
+            break
+    if not delivery_doc:
+        import re
+        m = re.search(r"交货单号:\s*(\d+)", delivery_result)
+        delivery_doc = m.group(1) if m else ""
+    if not delivery_doc:
+        return "\n\n".join(steps) + "\n\n❌ 无法从返回结果中解析交货单号，请手动检查。"
+
+    # Step 3: 更新库位和批次
+    if storage_location or batch:
+        update_params = {"delivery_document": delivery_doc, "delivery_item": "000010"}
+        if storage_location:
+            update_params["storage_location"] = storage_location
+        if batch:
+            update_params["batch"] = batch
+        upd = update_delivery_item(**update_params)
+        steps.append(f"【Step 3】更新库位/批次\n  {upd}")
+
+    # Step 4: PGI 发货过账
+    pgi_result = post_goods_issue(delivery_doc)
+    steps.append(f"【Step 4】PGI发货过账(MT543)\n  {pgi_result}")
+    if "失败" in pgi_result or "error" in pgi_result.lower():
+        return "\n\n".join(steps) + f"\n\n❌ 流程中止于Step 4（PGI），交货单 {delivery_doc} 发货失败。"
+
+    # Step 5: 1310侧收货 GR
+    gr_result = goods_receipt_for_po(
+        purchase_order=purchase_order,
+        purchase_order_item=str(int(purchase_order_item)),
+        storage_location=receiving_storage_location,
+        batch=batch,
+    )
+    steps.append(f"【Step 5】收货过账(MT101) → {po_plant}/{receiving_storage_location}\n  {gr_result}")
+    if "找不到" in gr_result or "失败" in gr_result:
+        return "\n\n".join(steps) + "\n\n⚠️ PGI已完成但收货失败，请手动在Fiori中对PO收货。"
+
+    # Step 6: IV跨公司发票（可选）
+    if not skip_billing:
+        iv_result = create_billing_document(
+            delivery_document=delivery_doc,
+            billing_document_type="IV",
+        )
+        steps.append(f"【Step 6】创建IV跨公司发票\n  {iv_result}")
+    else:
+        steps.append("【Step 6】IV开票已跳过（skip_billing=True）")
+
+    summary = (
+        f"✅ 跨公司STO流程完成\n"
+        f"采购订单: {purchase_order} | 交货单: {delivery_doc}\n"
+        f"物料: {po_material} | 数量: {po_qty} {po_unit}\n"
+        f"路径: 发货 {shipping_point}/{storage_location} → 收货 {po_plant}/{receiving_storage_location}"
+        + (f" | 批次: {batch}" if batch else "")
+    )
+    return summary + "\n\n" + "\n\n".join(steps)
 
 
 if __name__ == "__main__":
